@@ -1,1 +1,42 @@
-
+{
+  "name": "asset-manager-toolkit",
+  "displayName": "Asset Manager Toolkit",
+  "description": "Drag & drop assets into /assets and auto-insert Markdown links.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "assetManager",
+          "title": "Assets",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "assetManager": [
+        {
+          "id": "assetManagerView",
+          "name": "Asset Manager"
+        }
+      ]
+    }
+  },
+  "activationEvents": [
+    "onView:assetManagerView"
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.6.0"
+  }
+}
