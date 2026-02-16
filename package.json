@@ -1,0 +1,26 @@
+{
+  "name": "toolkitcli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI toolkit to screenshot a website and scaffold a clone.",
+  "type": "commonjs",
+  "bin": {
+    "toolkit": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "openai": "^4.82.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}
