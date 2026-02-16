@@ -35,3 +35,9 @@ The scaffolded clone is written to `./output/clone`.
 
 - Use `--no-ai` to skip model generation.
 - Use `--model <name>` to choose a model (default: `gpt-4.1-mini`).
+- Use `--refine <count>` to run additional refinement passes (default: `1`).
+
+## Navigation options
+
+- Use `--timeout <ms>` to increase navigation timeout for slow sites (default: `30000`).
+- Use `--wait <event>` to choose when the page is considered loaded: `load`, `domcontentloaded`, or `networkidle` (default: `networkidle`).

@@ -19,7 +19,10 @@ program
   .option("-w, --width <px>", "Viewport width", "1280")
   .option("-h, --height <px>", "Viewport height", "720")
   .option("--full-page", "Capture full page", false)
+  .option("--timeout <ms>", "Navigation timeout in milliseconds", "30000")
+  .option("--wait <event>", "Navigation wait event (load, domcontentloaded, networkidle)", "networkidle")
   .option("--model <name>", "OpenAI model name", "gpt-4.1-mini")
+  .option("--refine <count>", "Number of refinement passes", "1")
   .option("--no-ai", "Skip model generation")
   .action(async (url, options) => {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -31,9 +34,17 @@ program
     const outDir = path.resolve(process.cwd(), options.out);
     const width = Number(options.width);
     const height = Number(options.height);
+    const refinePasses = Math.max(0, Number(options.refine));
+    const timeoutMs = Math.max(0, Number(options.timeout));
+    const waitUntil = String(options.wait);
 
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
-      throw new Error("Width and height must be numbers.");
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      !Number.isFinite(refinePasses) ||
+      !Number.isFinite(timeoutMs)
+    ) {
+      throw new Error("Width, height, refine, and timeout must be numbers.");
     }
 
     fs.mkdirSync(outDir, { recursive: true });
@@ -43,8 +54,13 @@ program
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width, height } });
 
+    const allowedWaitUntil = new Set(["load", "domcontentloaded", "networkidle"]);
+    if (!allowedWaitUntil.has(waitUntil)) {
+      throw new Error("Wait must be one of: load, domcontentloaded, networkidle.");
+    }
+
     try {
-      await page.goto(url, { waitUntil: "networkidle" });
+      await page.goto(url, { waitUntil: waitUntil as "load" | "domcontentloaded" | "networkidle", timeout: timeoutMs });
       await page.screenshot({ path: screenshotPath, fullPage: options.fullPage });
     } finally {
       await browser.close();
@@ -62,6 +78,17 @@ program
           url,
           screenshotPath,
         });
+        for (let pass = 1; pass <= refinePasses; pass += 1) {
+          assets = await refineCloneAssets({
+            apiKey: apiKey as string,
+            model: String(options.model),
+            url,
+            screenshotPath,
+            assets,
+            pass,
+            total: refinePasses,
+          });
+        }
       } catch (error) {
         console.warn(
           "Model generation failed, falling back to scaffold.",
@@ -71,7 +98,7 @@ program
     }
 
     if (assets) {
-      writeGeneratedClone(scaffoldDir, assets);
+      writeGeneratedClone(scaffoldDir, normalizeAssets(assets));
     } else {
       writeScaffold(scaffoldDir, url, screenshotPath);
     }
@@ -175,6 +202,36 @@ function writeGeneratedClone(dir: string, assets: CloneAssets): void {
   fs.writeFileSync(path.join(dir, "script.js"), assets.js, "utf8");
 }
 
+function normalizeAssets(assets: CloneAssets): CloneAssets {
+  let html = assets.html;
+  if (!/\bstyles\.css\b/i.test(html)) {
+    html = injectIntoHead(html, '<link rel="stylesheet" href="styles.css" />');
+  }
+  if (!/\bscript\.js\b/i.test(html)) {
+    html = injectBeforeBodyClose(html, '<script src="script.js"></script>');
+  }
+
+  return {
+    html,
+    css: assets.css,
+    js: assets.js,
+  };
+}
+
+function injectIntoHead(html: string, snippet: string): string {
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${snippet}\n</head>`);
+  }
+  return `${snippet}\n${html}`;
+}
+
+function injectBeforeBodyClose(html: string, snippet: string): string {
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${snippet}\n</body>`);
+  }
+  return `${html}\n${snippet}`;
+}
+
 type CloneAssets = {
   html: string;
   css: string;
@@ -188,6 +245,12 @@ type GenerateOptions = {
   screenshotPath: string;
 };
 
+type RefineOptions = GenerateOptions & {
+  assets: CloneAssets;
+  pass: number;
+  total: number;
+};
+
 async function generateCloneAssets(options: GenerateOptions): Promise<CloneAssets> {
   const client = new OpenAI({ apiKey: options.apiKey });
   const imageBase64 = fs.readFileSync(options.screenshotPath).toString("base64");
@@ -198,6 +261,48 @@ async function generateCloneAssets(options: GenerateOptions): Promise<CloneAsset
     "- css should be scoped to the generated markup.",
     "- js can be empty if not needed.",
     `Website URL: ${options.url}`,
+  ].join("\n");
+
+  const response = await client.responses.create({
+    model: options.model,
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${imageBase64}`,
+            detail: "high",
+          },
+        ],
+      },
+    ],
+    temperature: 0.2,
+  });
+
+  const outputText = (response as { output_text?: string }).output_text || extractOutputText(response);
+  if (!outputText) {
+    throw new Error("No model output returned.");
+  }
+
+  const jsonText = extractJson(outputText);
+  const assets = JSON.parse(jsonText) as CloneAssets;
+  validateAssets(assets);
+  return assets;
+}
+
+async function refineCloneAssets(options: RefineOptions): Promise<CloneAssets> {
+  const client = new OpenAI({ apiKey: options.apiKey });
+  const imageBase64 = fs.readFileSync(options.screenshotPath).toString("base64");
+  const prompt = [
+    "You are refining a static webpage clone based on the screenshot.",
+    "Return ONLY valid JSON with keys: html, css, js.",
+    "Keep existing structure when possible, but fix layout, spacing, and typography to better match the screenshot.",
+    `This is refinement pass ${options.pass} of ${options.total}.`,
+    `Website URL: ${options.url}`,
+    "Current assets JSON:",
+    JSON.stringify(options.assets),
   ].join("\n");
 
   const response = await client.responses.create({
